@@ -1,0 +1,314 @@
+---
+title: "CS1950_Week03_PiB"
+author: "Modified by Hunsi" 
+date: "1/29/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+
+```{r, load_tidyverse_pkg}
+library(tidyverse)
+```
+
+## Read data
+
+```{r, read_csv_file}
+file_name <- ("https://raw.githubusercontent.com/jyurko/cs_1950_brain_proj/main/KLU_APC2_Master_2021_07_07.csv?token=GHSAT0AAAAAABQQ7BMCOBSTBU3XSIKIUTKEYQGUGLQ")
+df <- readr::read_csv(file_name,col_names = TRUE)
+```
+
+## Check unique identifiers
+
+The number of rows associated with each `Vault_Scan_ID`.  
+
+```{r, count_scan_ids_a}
+df %>% 
+  count(Vault_Scan_ID)
+```
+
+The count for the number of rows associated with each `Vault_Scan_ID`.  
+
+```{r, count_scan_ids_b}
+df %>% 
+  count(Vault_Scan_ID) %>% 
+  count(n, name = "times_occuring")
+```
+
+So there is one `Vault_Scan_ID` that occurs twice, check which one:  
+Vault_Scan_ID = 802688 occurs twice 
+
+```{r, count_scan_ids_c}
+df %>% 
+  count(Vault_Scan_ID) %>% 
+  filter(n > 1)
+```
+
+Look at the rows associated with that `Vault_Scan_ID` value along with the `Vault_UID` value.  
+
+```{r, check_scan_ids_d}
+vault_id_focus <- df %>% 
+  count(Vault_Scan_ID) %>% 
+  filter(n > 1) %>% 
+  pull(Vault_Scan_ID)
+df %>% 
+  select(Vault_Scan_ID, Vault_UID) %>% 
+  filter(Vault_Scan_ID %in% vault_id_focus)
+```
+
+Include columns involving date in the column name.  
+
+```{r, check_scan_ids_e}
+df %>% 
+  select(Vault_Scan_ID, Vault_UID, ends_with("_date", ignore.case = TRUE)) %>% 
+  filter(Vault_Scan_ID %in% vault_id_focus)
+```
+
+Check columns that contain "ID" in the column name.  
+
+```{r, check_scan_ids_f}
+df %>% 
+  select(Vault_Scan_ID, Vault_UID, contains("ID", ignore.case = FALSE)) %>% 
+  filter(Vault_Scan_ID %in% vault_id_focus)
+```
+
+
+**What other identifiers should be considered here??** 
+Identifiers to include : age, sex, race, education , APOE_allele, PiB Regional values Left , PiB regional Right, PiB Global Values , GMD regional Left, GMD right, GMD global, FDG Regional left, FDG regional Right, FDG global  
+
+How many unique people are there? And how many rows are associated with each unique person?  n = 93 ; max number of rows associated with a unique person is 4 
+
+```{r, check_people_ids_a}
+df %>% 
+  count(Vault_UID) %>% 
+  arrange(desc(n))
+```
+
+Count for the number of times each unique number of rows appears. So there are 6 `Vault_UID` values with 4 rows in the data set. There are 28 `Vault_ID` values with 3 rows in the data set. There are more unique `Vault_UID` values that appear more than once in the data set than the `Vault_UID` values that appear once.  
+
+```{r, check_people_ids_b}
+df %>% 
+  count(Vault_UID) %>% 
+  count(n, name='times_occurs')
+```
+
+
+## PiB Exploration
+
+Extract the PiB related variables along with the unique identifiers.  
+
+**Will need to do this again based on the unique identifiers that should be included.**  
+
+```{r, get_pib_data}
+pib_df <- df %>% select(Vault_Scan_ID, Vault_UID, starts_with("PIB_"))
+pib_df %>% glimpse()
+```
+
+**Are the columns with names starting with `PiB_SUVR_GTM_` related to the "aggregate" or "macro" regions?**  
+
+Yes, PiB_SUVR_GTM refers to the aggregate or global regions. 
+
+For now, focus on the variables with `PiB_regional_` naming patterns.  
+
+```{r, make_pib_regional_df}
+pib_regional_wf <- pib_df %>% 
+  select(starts_with("Vault"), PIB_Scan_Date, starts_with("PiB_regional"))
+pib_regional_wf %>% glimpse()
+```
+
+Check number of missings per column.  
+
+```{r, count_missings_per_column}
+pib_regional_wf %>% purrr::map_dbl(~sum(is.na(.)))
+```
+
+Distribution of the PIB regional variables across all rows. This ignores any grouping by people.  
+
+```{r, viz_pib_hists}
+pib_regional_wf %>% 
+  tibble::rowid_to_column() %>% 
+  pivot_longer(cols = starts_with("PiB_regional")) %>% 
+  ggplot(mapping = aes(x = value)) +
+  geom_histogram(bins = 15) +
+  facet_wrap(~name) +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(size = 4.5))
+```
+
+
+Use boxplots instead.  
+
+```{r, viz_pib_boxplots}
+pib_regional_wf %>% 
+  tibble::rowid_to_column() %>% 
+  pivot_longer(cols = starts_with("PiB_regional")) %>% 
+  ggplot(mapping = aes(y = name, x = value)) +
+  geom_boxplot(fill = 'grey') +
+  theme_bw() +
+  theme(axis.text.y = element_text(size = 5.5))
+```
+
+
+Start to parse the regional variable names.  
+
+Create a helper function to separate the variable names based on the `'_'` pattern. The helper function is required because the number of underscores is not consistent across the regional names.  
+
+```{r, make_helper_parser}
+my_separate <- function(the_data, num_us)
+{
+  names_keep <- the_data %>% select(-name) %>% names()
+  
+  the_data %>% 
+    tidyr::separate(name,
+                    c("result_type", "regional_word",
+                      sprintf("name_%02d", 1:(num_us-1))),
+                    sep = "_") %>% 
+    rename(!!!c("side_name" = sprintf("name_%02d", num_us-1))) %>% 
+    tidyr::unite("region_name",
+                 sprintf("name_%02d", 1:(num_us-2)),
+                 sep = "_") %>% 
+    select(all_of(c(names_keep,
+                    "result_type", "region_name", "side_name")))
+}
+```
+
+Apply the helper function based on the number of underscores to create the long-format data.  
+
+```{r, check_parse_regional_names_a}
+pib_regional_lf <- pib_regional_wf %>% 
+  tibble::rowid_to_column() %>% 
+  pivot_longer(cols = starts_with("PiB_regional")) %>% 
+  mutate(num_underscores = stringr::str_count(name, pattern = "_")) %>% 
+  group_by(num_underscores) %>% 
+  tidyr::nest() %>% 
+  mutate(ready_data = purrr::map2(data, num_underscores, my_separate)) %>% 
+  select(num_underscores, ready_data) %>% 
+  tidyr::unnest(ready_data) %>% 
+  ungroup()
+```
+
+
+Check the unique region names and the number of rows associated with each region name.  
+
+```{r, check_parse_regioinal_names_b}
+pib_regional_lf %>% 
+  ggplot(mapping = aes(y = region_name)) +
+  geom_bar() +
+  theme_bw()
+```
+
+Include the side.  
+
+```{r, check_parse_regional_names_c}
+pib_regional_lf %>% 
+  ggplot(mapping = aes(y = region_name)) +
+  geom_bar(mapping = aes(fill = side_name)) +
+  scale_fill_brewer(palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top') 
+```
+
+Distributions of PIB values per region and side. Note the x-axis scales are the same in each facet.  
+
+Frontal_Sup_2 regions shows significant asymmetry out of all the regions 
+
+```{r, viz_pib_results_hist}
+pib_regional_lf %>% 
+  ggplot(mapping = aes(x = value)) +
+  geom_freqpoly(mapping = aes(color = side_name,
+                              group = interaction(region_name, 
+                                                  side_name),
+                              y = stat(density)),
+                size = 1.2,
+                bins = 15) +
+  facet_wrap(~region_name, scales = "free_y") +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top',
+        axis.text.y = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6.5))
+```
+
+Allow the x-axis scales to vary across facets.  
+
+```{r, viz_pib_results_hist_b}
+pib_regional_lf %>% 
+  ggplot(mapping = aes(x = value)) +
+  geom_freqpoly(mapping = aes(color = side_name,
+                              group = interaction(region_name, 
+                                                  side_name),
+                              y = stat(density)),
+                size = 1.2,
+                bins = 15) +
+  facet_wrap(~region_name, scales = "free") +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top',
+        axis.text.y = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6.5))
+```
+
+Check the behavior of the repeated observations per person. The x-axis corresponds to a unique `Vault_UID` but the axis text has been turned off to make the plots easier to read.  
+
+```{r, viz_result_per_person_a}
+pib_regional_lf %>% 
+  ggplot(mapping = aes(x = as.factor(Vault_UID), y = value)) +
+  stat_summary(geom = 'linerange',
+               fun.min = 'min', fun.max = 'max',
+               mapping = aes(group = interaction(Vault_UID, 
+                                                 region_name,
+                                                 side_name),
+                             color = side_name),
+               position = position_dodge(0.1),
+               size = 1.2, alpha = 0.5) +
+  geom_point(mapping = aes(group = interaction(Vault_UID,
+                                               region_name,
+                                               side_name),
+                           color = side_name),
+             position = position_dodge(0.1)) +
+  facet_wrap(~region_name, scales = 'free_y') +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top',
+        axis.text.x = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6.5))
+```
+
+
+Since the above figure is so busy, focus on a single region.  
+
+Changed the region to Frontal_Sup_2 since it shows significant asymmetry 
+
+```{r, viz_result_per_person_a_1}
+pib_regional_lf %>% 
+  filter(region_name %in% 'Frontal_Sup_2') %>% 
+  ggplot(mapping = aes(x = as.factor(Vault_UID), y = value)) +
+  stat_summary(geom = 'linerange',
+               fun.min = 'min', fun.max = 'max',
+               mapping = aes(group = interaction(Vault_UID, 
+                                                 region_name,
+                                                 side_name),
+                             color = side_name),
+               position = position_dodge(0.2),
+               size = 1.2, alpha = 0.5) +
+  geom_point(mapping = aes(group = interaction(Vault_UID,
+                                               region_name,
+                                               side_name),
+                           color = side_name),
+             position = position_dodge(0.2)) +
+  facet_wrap(~region_name, scales = 'free_y') +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top',
+        axis.text.x = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 13.5))
+```

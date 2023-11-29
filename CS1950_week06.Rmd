@@ -1,0 +1,772 @@
+---
+title: "PCA GMD_Reshaping Data"
+author: "Hunsi Jayaprakash"
+date: "2/24/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, load_packages}
+library(tidyverse)
+library(factoextra)
+```
+
+## Read data
+
+```{r, read_data}
+file_name <- ("https://raw.githubusercontent.com/jyurko/cs_1950_brain_proj/main/KLU_APC2_Master_2021_07_07.csv?token=GHSAT0AAAAAABQQ7BMDVZWJ7F7SRYQVFIG4YRZE2LQ")
+df <- readr::read_csv(file_name,col_names = TRUE)
+```
+
+Other markdowns perform basic counts and checks and so those will not be repeated here.  
+
+## Extract GMD regional data
+
+```{r, get_gmd_regional_data}
+gmd_regional_df <- df %>% select(Vault_Scan_ID, Vault_UID, MR_Scan_Date, starts_with("GMD_"))
+```
+
+```{r, get_gmd_regional_2}
+gmd_regional_wf <- gmd_regional_df %>% 
+  select(starts_with("Vault"), MR_Scan_Date, starts_with("GMD_regional"))
+```
+
+
+Organize the data into long-format to better understand the region and side groups.  
+
+```{r, make_helper_function}
+my_separate <- function(the_data, num_us)
+{
+  names_keep <- the_data %>% select(-name) %>% names()
+  
+  the_data %>% 
+    tidyr::separate(name,
+                    c("result_type", "regional_word",
+                      sprintf("name_%02d", 1:(num_us-1))),
+                    sep = "_") %>% 
+    rename(!!!c("side_name" = sprintf("name_%02d", num_us-1))) %>% 
+    tidyr::unite("region_name",
+                 sprintf("name_%02d", 1:(num_us-2)),
+                 sep = "_") %>% 
+    select(all_of(c(names_keep,
+                    "result_type", "region_name", "side_name")))
+}
+```
+
+
+```{r, make_gmd_longformat}
+gmd_regional_lf <- gmd_regional_wf %>% 
+  tibble::rowid_to_column() %>% 
+  pivot_longer(cols = starts_with("GMD_regional")) %>% 
+  mutate(num_underscores = stringr::str_count(name, pattern = "_")) %>% 
+  group_by(num_underscores) %>% 
+  tidyr::nest() %>% 
+  mutate(ready_data = purrr::map2(data, num_underscores, my_separate)) %>% 
+  select(num_underscores, ready_data) %>% 
+  tidyr::unnest(ready_data) %>% 
+  ungroup()
+```
+
+Check the long-format.  
+
+```{r, check_longformat_glimpse}
+gmd_regional_lf %>% glimpse()
+```
+
+## Group and average
+
+Start by averaging the values per person across scans.  
+
+```{r, make_grouped_person_data}
+gmd_person_summary <- gmd_regional_lf %>% 
+  group_by(result_type, Vault_UID, region_name, side_name) %>% 
+  summarise(num_rows = n(),
+            num_scans = n_distinct(Vault_Scan_ID),
+            num_dates = n_distinct(MR_Scan_Date),
+            num_missing = sum(is.na(value)),
+            avg_value = mean(value, na.rm = TRUE),
+            min_value = min(value, na.rm = TRUE),
+            max_value = max(value, na.rm = TRUE),
+            .groups = 'drop')
+```
+
+
+```{r, check_summary_object}
+gmd_person_summary %>% glimpse()
+```
+
+
+## Reshape to wide-format
+
+Check the number of regions and sides.  
+
+```{r, check_number_regions_total}
+gmd_person_summary %>% count(region_name, side_name)
+```
+
+Reshape the AVERAGE values to wide-format.  
+
+```{r, reshape_to_wf_with_averages}
+gmd_avg_person_wf <- gmd_person_summary %>% 
+  select(Vault_UID, avg_value, result_type, region_name, side_name) %>% 
+  tidyr::unite(result_region_name,
+               c("result_type", "region_name", "side_name"),
+               sep = "-") %>% 
+  pivot_wider(id_cols = "Vault_UID", names_from = "result_region_name", values_from = "avg_value")
+```
+
+
+Check missings.  
+
+```{r, check_missing_values}
+gmd_avg_person_wf %>% 
+  purrr::map_dbl(~sum(is.na(.)))
+```
+
+Rows before dropping the missings.  
+
+```{r, rows_in_wf_data}
+gmd_avg_person_wf %>% nrow()
+```
+
+Rows for complete cases.  
+
+```{r, rows_in_wf_complete}
+gmd_avg_person_wf %>% 
+  drop_na() %>% 
+  nrow()
+```
+
+
+## Correlation
+
+Show the correlation plot for the complete cases.  
+
+```{r, viz_corrplot_1}
+gmd_avg_person_wf %>% 
+  select(-Vault_UID) %>% 
+  drop_na() %>% 
+  as.data.frame() %>% 
+  cor() %>% 
+  corrplot::corrplot(method = 'square', tl.pos = 'n')
+```
+
+
+Reorder by a hierarchical cluster.  
+
+```{r, viz_corrplot_2}
+gmd_avg_person_wf %>% 
+  select(-Vault_UID) %>% 
+  drop_na() %>% 
+  as.data.frame() %>% 
+  cor() %>% 
+  corrplot::corrplot(method = 'square', tl.pos = 'n',
+                     order = 'hclust', hclust.method = 'ward.D2')
+```
+
+
+```{r}
+gmd_avg_person_wf %>% select(-Vault_UID) %>% ncol()
+```
+
+
+## PCA
+
+Apply PCA to the complete cases but do NOT include the person ID. The person ID is just an identifier that will help with the visualizations and interpretation.  
+
+```{r, make_the_ready_data}
+ready_wf <- gmd_avg_person_wf %>% 
+  select(-Vault_UID) %>% 
+  drop_na()
+ready_wf %>% dim()
+```
+
+```{r, make_the_ready_data_glimpse}
+ready_wf %>% glimpse()
+```
+Perform PCA
+
+```{r, perform_pca}
+ready_pca <- prcomp(ready_wf, center = TRUE, scale. = TRUE)
+```
+
+
+```{r, perform_pca_glimpse}
+ready_pca  %>% glimpse()
+### the center and scales are the means and sd's of the variables
+ready_pca$center
+
+ready_wf %>% purrr::map_dbl(~mean(.))
+
+ready_pca$scale
+
+ready_wf %>% purrr::map_dbl(~sd(.))
+
+```
+```{r, PC_scores}
+### the PC scores are contained in the `$x` field
+ready_pca$x %>% class()
+
+ready_pca$x %>% dim()
+
+ready_pca$x %>% colnames()
+
+### the rows corresponds to observations of the PC scores
+ready_pca$x %>% head()
+
+```
+
+```{r, load_matrix_rotation}
+### the loadings matrix is stored as the `$rotation` field
+ready_pca$rotation %>% class()
+
+ready_pca$rotation %>% dim()
+
+ready_pca$rotation %>% head()
+
+### the columns correspond to PCs and the rows to original variables
+### a column therefore stores the loadings applied to the variables for PC
+ready_pca$rotation[, 1]
+
+### the loadings are NORMALIZED so the sum of their squares equals 1
+ready_pca$rotation[, 1]^2
+
+sum(ready_pca$rotation[, 1]^2 )
+
+### this holds for ALL pcs!
+sum(ready_pca$rotation[, 2]^2 )
+
+sum(ready_pca$rotation[, 3]^2 )
+```
+
+##Summarize PCA 
+
+```{r, summarize_pca}
+ready_pca %>% summary()
+```
+# Use factoextra library 
+
+```{r, pca_analysis}
+factoextra::get_eigenvalue(ready_pca) %>% head(25)
+
+```
+
+```{r, get_eigen_values_pca}
+
+
+### the fraction of the variance explained per PC is the eigenvalue
+### divided by the sum of the eigenvalues
+(factoextra::get_eigenvalue(ready_pca))$eigenvalue / 
+  sum( (factoextra::get_eigenvalue(ready_pca))$eigenvalue )
+
+### multiply by 100 to be consistent with factoextra
+100*(factoextra::get_eigenvalue(ready_pca))$eigenvalue / 
+  sum( (factoextra::get_eigenvalue(ready_pca))$eigenvalue )
+```
+
+# Why do we have to muliply by 100? Is this for scaling
+
+```{r, visualize_scree}
+### visualize the fraction of the variance explained per PC with a scree plot
+factoextra::fviz_screeplot(ready_pca, addlabels = FALSE, ncp = 25)
+```
+How can I change the dimension to include all 52? 
+
+```{r, variance_plot_spec_dim}
+### cumultive or total variance explained
+factoextra::get_eigenvalue(ready_pca) %>% 
+  select(ends_with("percent")) %>% 
+  tibble::rownames_to_column() %>% 
+  tibble::as_tibble() %>% 
+  mutate(pc_id = as.numeric(stringr::str_extract(rowname, "\\d+"))) %>% 
+  pivot_longer(!c("rowname", "pc_id")) %>% 
+  ggplot(mapping = aes(x = pc_id, y = value)) +
+  geom_point(size = 2.5) +
+  geom_line(mapping = aes(group = name),
+            size = 1.1) +
+  facet_wrap(~name, scales = "free_y", ncol = 1) +
+  theme_bw()
+```
+Explain the log graph of cumulative variance percent.Why is there a steep decline in the variance percent initially and then plateaus off? 
+
+### which of the original variables relates to the PCS?
+
+### the loadings matrix tells us that!
+
+
+```{r, var_relates_PCA}
+corrplot::corrplot(ready_pca$rotation, is.corr = FALSE, method = "square", tl.cex=0.85, tl.pos = 'n')
+
+```
+Hard to identify groups/variables in the above corr plot (mix of positive and negative)
+
+```{r, var_rotation}
+## check which variables have negative loadings to PC1
+ready_pca$rotation[, 1]
+
+### squaring the loadings gives us the CONTRIBUTION of the variables
+
+### to the PC regardless of direction
+
+### can visualize the as a barchart
+factoextra::fviz_contrib(ready_pca, choice = 'var', axes = 1, tl.pos = 'n')
+```
+Can I remove the labels to visualize regions that correspond to higher contributions to PC regardless of direction
+
+```{r, second_pc_unit_circle}
+
+### check
+sort(100 * (ready_pca$rotation[, 1]^2 / sum(ready_pca$rotation[, 1]^2) ), decreasing = TRUE)
+
+### the second PC
+factoextra::fviz_contrib(ready_pca, choice = 'var', axes = 1)
+
+### can visualize the relationship between the variables to the PCs on a unit circle
+factoextra::fviz_pca_var(ready_pca, col.var='black')
+
+# remove labels to properly visualize 
+
+### positively correlated variables are grouped together in this plot
+### negatively correlated variables are on opposite sides of the plot
+### closer to the unit circle an arrow is the more that variable
+### contributes to that PC
+
+```
+```{r, pca_biplot_visualize}
+### which observations are "grouped together"? Can find out with the BIPLOT
+factoextra::fviz_pca_biplot(ready_pca)
+
+# remove labels to see plot better 
+
+### the observations in the biplot are just the PC scores
+ready_pca$x %>% as.data.frame() %>% tibble::as_tibble() %>% 
+  ggplot(mapping = aes(x = PC1, y = PC2)) +
+  geom_point(size = 3.5) +
+  theme_bw()
+
+# compare PC1 with PC3
+ready_pca$x %>% as.data.frame() %>% tibble::as_tibble() %>% 
+  ggplot(mapping = aes(x = PC2, y = PC3)) +
+  geom_point(size = 3.5) +
+  theme_bw()
+
+
+```
+
+How many observations (PC1 v ...) should we examine when looking at PC Biplot 
+
+
+Repeat above process but with non standardized variables
+```{r, unstandardize_pca}
+### what would happen if we did NOT standardize the variables??
+ready_pca_nostan <- prcomp(ready_wf, center = TRUE, scale. = FALSE)
+
+```
+
+```{r, screeplot_pca_unstandardize}
+### scree plot "looks" great! we just need 1 PC!
+factoextra::fviz_screeplot(ready_pca_nostan, addlabels= FALSE)
+factoextra::get_eigenvalue(ready_pca_nostan) %>% head(25)
+
+### but...PC1 is only representing a few variables...
+factoextra::fviz_pca_var(ready_pca_nostan, col.var='black')
+
+# remove labels
+
+### PC1 is constructed to "explain" the direction with the most
+### variation in the data set
+### if we do not standardize...the "most variation" is just the
+### variables with the largest variance!!!
+```
+
+```{r, largest_variance_pca_not_standard}
+
+### the variables with the largest variance in the data set..
+ready_wf %>% purrr::map_dbl(var)
+```
+
+```{r, sd_variance}
+### easier to read in terms of the standard deviation
+ready_wf %>% purrr::map_dbl(sd)
+
+```
+The GMD-Frontal_Inf_Orb_2-R had the most variation according to sd values above 
+
+we should standardize so the natural units do not impact the interpretation
+
+Second interpretation: MODEL of the data
+
+can consider the RECONSTRUCTION ERROR or approximation error of the original variables based on a specified number of PCs
+
+define a function to reconstruct the original data set for a given number of PCs to retain
+
+
+```{r, function_reconstruct_data, eval = TRUE}
+my_reconstruct <- function(nComp, pca_obj)
+{
+  # extract the scores
+  z_mat <- pca_obj$x[, 1:nComp, drop=FALSE]
+  
+  # extract the loadings matrix
+  phi_mat <- pca_obj$rotation[, 1:nComp, drop = FALSE]
+  
+  # reconstruct the standardized variables
+  xhat <- z_mat %*% t(phi_mat)
+  
+  # rescale the reconstructed variables
+  xhat <- scale(xhat, center = FALSE, scale = 1/pca_obj$scale)
+  
+  # add back the means
+  scale(xhat, center = -pca_obj$center, scale = FALSE)
+}
+```
+
+```{r, recon_based_1_pc}
+
+my_reconstruct(1, ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  ggplot(mapping = aes(x = observed_value, y = reconstructed_value)) +
+  geom_point(color = "black") +
+  geom_abline(slope = 1, intercept = 0,
+              color = "red", linetype = "dashed") +
+  #facet_wrap(~name, scales = "free") +
+  theme_bw()
+
+```
+
+
+Instead of looking at a reconstructed-vs-observed plot, summarize the absolute reconstruction error per region.  
+
+```{r}
+my_reconstruct(1, ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  tidyr::separate(name,
+                  c("result_name", "region_name", "side_name"),
+                  sep = "-") %>% 
+  ggplot(mapping = aes(y = region_name, 
+                       x = abs(reconstructed_value - observed_value))) +
+  geom_boxplot(mapping = aes(group = interaction(result_name,
+                                                 region_name,
+                                                 side_name),
+                             fill = side_name,
+                             color = side_name),
+               alpha = 0.33) +
+  scale_fill_brewer("", palette = "Set1") +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw()
+```
+
+Include 7 PCs in the reconstruction.  
+
+```{r}
+my_reconstruct(7, ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  tidyr::separate(name,
+                  c("result_name", "region_name", "side_name"),
+                  sep = "-") %>% 
+  ggplot(mapping = aes(y = region_name, 
+                       x = abs(reconstructed_value - observed_value))) +
+  geom_boxplot(mapping = aes(group = interaction(result_name,
+                                                 region_name,
+                                                 side_name),
+                             fill = side_name,
+                             color = side_name),
+               alpha = 0.33) +
+  scale_fill_brewer("", palette = "Set1") +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw()
+```
+
+Directly compare reconstruction error between number of PCs retained.  
+
+```{r}
+my_reconstruct(1, ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  tidyr::separate(name,
+                  c("result_name", "region_name", "side_name"),
+                  sep = "-") %>% 
+  mutate(num_pcs = 1) %>% 
+  bind_rows(my_reconstruct(7, ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  tidyr::separate(name,
+                  c("result_name", "region_name", "side_name"),
+                  sep = "-") %>% 
+    mutate(num_pcs = 7)) %>% 
+  ggplot(mapping = aes(y = region_name, 
+                       x = abs(reconstructed_value - observed_value))) +
+  geom_boxplot(mapping = aes(group = interaction(result_name,
+                                                 region_name,
+                                                 side_name,
+                                                 num_pcs),
+                             fill = side_name,
+                             color = side_name),
+               alpha = 0.33) +
+  facet_wrap(~num_pcs, labeller = 'label_both') +
+  scale_fill_brewer("", palette = "Set1") +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw()
+```
+
+Compare to including 30 PCs.  
+
+```{r}
+my_reconstruct(1, ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  tidyr::separate(name,
+                  c("result_name", "region_name", "side_name"),
+                  sep = "-") %>% 
+  mutate(num_pcs = 1) %>% 
+  bind_rows(my_reconstruct(7, ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  tidyr::separate(name,
+                  c("result_name", "region_name", "side_name"),
+                  sep = "-") %>% 
+    mutate(num_pcs = 7)) %>% 
+  bind_rows(my_reconstruct(33, ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  tidyr::separate(name,
+                  c("result_name", "region_name", "side_name"),
+                  sep = "-") %>% 
+    mutate(num_pcs = 33)) %>% 
+  ggplot(mapping = aes(y = region_name, 
+                       x = abs(reconstructed_value - observed_value))) +
+  geom_boxplot(mapping = aes(group = interaction(result_name,
+                                                 region_name,
+                                                 side_name,
+                                                 num_pcs),
+                             fill = side_name,
+                             color = side_name),
+               alpha = 0.33) +
+  facet_wrap(~num_pcs, labeller = 'label_both') +
+  scale_fill_brewer("", palette = "Set1") +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw()
+```
+
+
+Couldn't visualize with facet wrap because of 52 PCA. Better way to visualize reconstructed versus observed value? 
+
+```{r, first_two_PC_recons}
+
+### reconstruct based on the first two PCs
+my_reconstruct(2, ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  ggplot(mapping = aes(x = observed_value, y = reconstructed_value)) +
+  geom_point(color = "black") +
+  geom_abline(slope = 1, intercept = 0,
+              color = "red", linetype = "dashed") +
+  facet_wrap(~name, scales = "free") +
+  theme_bw()
+```
+Reformatting to better visualize facet wrap? Can't tell what is going on between reconstructed and observed values. Do points along the red line indicate that the reconstructed value is the same as the observed value?
+
+
+```{r, first_3_PC_recon}
+
+### reconstruct based on the first 3 PCs
+my_reconstruct(3,ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  ggplot(mapping = aes(x = observed_value, y = reconstructed_value)) +
+  geom_point(color = "black") +
+  geom_abline(slope = 1, intercept = 0,
+              color = "red", linetype = "dashed") +
+  facet_wrap(~name, scales = "free") +
+  theme_bw()
+```
+Having difficulty visualize facet wraps 
+
+```{r, visualize_all_pc}
+
+### what happens if we use ALL PCs??
+my_reconstruct(ncol(ready_pca$x), ready_pca) %>% 
+  as.data.frame() %>% tibble::rownames_to_column() %>% 
+  pivot_longer(!c("rowname"), values_to = "reconstructed_value") %>% 
+  left_join(ready_wf %>% 
+              tibble::rownames_to_column() %>% 
+              pivot_longer(!c("rowname"), values_to = "observed_value"),
+            by = c("name", "rowname")) %>% 
+  ggplot(mapping = aes(x = observed_value, y = reconstructed_value)) +
+  geom_point(color = "black") +
+  geom_abline(slope = 1, intercept = 0,
+              color = "red", linetype = "dashed") +
+  #facet_wrap(~name, scales = "free") +
+  theme_bw()
+```
+The reconstructed values all fall onto the dashed line. Perfect reconstruction but no dimension reduction. Find a balance. Total variance is somewhat explained by the reconstruction error. More PC capture more variance. Eigenvalues and fraction variance tells us more
+
+
+```{r, install_ggseg}
+library(ggfortify)
+
+```
+
+```{r, generate_plot_pc2_pc1}
+# Generate heat map for PCA 2 vs PCA 1     
+
+gmd_pca_plot <-autoplot((ready_pca),color = 'Species')
+
+```
+
+```{r, heatmap}
+# wasn't able to generate this heatmap 
+
+aa<- grep("grey",colors())
+bb<- grep("green",colors())
+cc<-  grep("red",colors())
+gcol2<- colors()[c(aa[1:30],bb[1:20],rep(cc,2))]
+
+## use the weights from PC1. 
+
+pca1_object <- my_reconstruct(1, ready_pca)
+ord1<- order(abs(pca1_object), decreasing=TRUE)
+x1<- as.matrix(ord1[1:52])
+x1
+#heatmap(x1,col=gcol2)
+
+
+```
+
+```{r, generate_heat_map_pheatmap}
+vst_cor <- as.matrix(cor(ready_pca$x, method="spearman"))
+library(pheatmap)
+library(RColorBrewer)
+
+vst_cor
+
+heat_map_plot <- pheatmap(vst_cor, color =  colorRampPalette(rev(brewer.pal(n = 7, name =
+  "RdYlBu")))(100), kmeans_k = NA, breaks = NA, border_color = "grey60", cluster_rows = TRUE,
+  cluster_cols = TRUE, clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean", clustering_method = "complete")
+
+
+heat_map_plot
+
+```
+
+```{r, contrib_active_inactive}
+
+
+contribution_plot <- factoextra::fviz_contrib(ready_pca, choice = 'var', axes = 1, tl.pos = 'n')
+
+
+# how do I identify the threshold (horizontal value) (I used 1.75)
+
+contribution_plot$data %>% glimpse()
+
+# encode all active values as 1 and encode all inactive values as 0 
+
+pca1_activation <- contribution_plot$data %>% mutate(active_status = ifelse(contribution_plot$data$contrib > 1.75, 1, 0))
+
+# what regions are active for pc1? 
+
+
+```
+
+```{r, atlas_brain}
+library(dplyr)
+library(ggseg)
+
+#gmd_avg_person_wf
+
+# Need to separate regions in gmd_avg_person_wf into groups 
+
+# g1 -- Frontal regions 
+# g2 -- Temporal 
+# g3 -- 
+
+#someData <- tibble(
+ # region = rep(c("transverse temporal", "insula",
+#           "precentral","superior parietal"), 2), 
+ # p = sample(seq(0,.5,.001), 8),
+#  groups = c(rep("g1", 4), rep("g2", 4))
+#)
+
+#gmd_avg_person_wf %>%
+ # ggplot() +
+ # geom_brain(atlas = dk, 
+           #  position = position_brain(hemi ~ side),
+          #   aes(fill = values)) +
+  #facet_wrap(~groups)
+#> merging atlas and data by 'region'
+
+
+```
+```{r, data}
+# Enable this universe
+options(repos = c(
+    ggseg = 'https://ggseg.r-universe.dev',
+    CRAN = 'https://cloud.r-project.org'))
+
+# Install some packages
+install.packages('ggsegHO')
+# install.packages("remotes")
+remotes::install_github("LCBC-UiO/ggsegHO")
+
+
+library(ggseg)
+#> Warning: package 'ggseg' was built under R version 4.1.1
+#> Loading required package: ggplot2
+library(ggplot2)
+
+
+plot(dk) +
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 6)) +
+  guides(fill = guide_legend(ncol = 3))
+
+ gmd_avg_person_wf$
+
+```

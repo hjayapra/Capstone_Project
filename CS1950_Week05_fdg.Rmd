@@ -1,0 +1,500 @@
+---
+title: "CS1950_Week05_FDG"
+author: "Modified by Hunsi" 
+date: "1/29/2022"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load packages
+
+```{r, load_tidyverse_pkg}
+library(tidyverse)
+```
+
+## Read data
+
+```{r, read_csv_file}
+file_name <- ("https://raw.githubusercontent.com/jyurko/cs_1950_brain_proj/main/KLU_APC2_Master_2021_07_07.csv?token=GHSAT0AAAAAABQQ7BMCJN2DI3DFUBFY6DSMYQXTN3A")
+df <- readr::read_csv(file_name,col_names = TRUE)
+```
+
+## Check unique identifiers
+
+The number of rows associated with each `Vault_Scan_ID`.  
+
+```{r, count_scan_ids_a}
+df %>% 
+  count(Vault_Scan_ID)
+```
+
+The count for the number of rows associated with each `Vault_Scan_ID`.  
+
+```{r, count_scan_ids_b}
+df %>% 
+  count(Vault_Scan_ID) %>% 
+  count(n, name = "times_occuring")
+```
+
+So there is one `Vault_Scan_ID` that occurs twice, check which one:  
+Vault_Scan_ID = 802688 occurs twice 
+
+```{r, count_scan_ids_c}
+df %>% 
+  count(Vault_Scan_ID) %>% 
+  filter(n > 1)
+```
+
+Look at the rows associated with that `Vault_Scan_ID` value along with the `Vault_UID` value.  
+
+```{r, check_scan_ids_d}
+vault_id_focus <- df %>% 
+  count(Vault_Scan_ID) %>% 
+  filter(n > 1) %>% 
+  pull(Vault_Scan_ID)
+df %>% 
+  select(Vault_Scan_ID, Vault_UID) %>% 
+  filter(Vault_Scan_ID %in% vault_id_focus)
+```
+
+
+Include columns involving date in the column name.  
+
+```{r, check_scan_ids_e}
+df %>% 
+  select(Vault_Scan_ID, Vault_UID, ends_with("_date", ignore.case = TRUE)) %>% 
+  filter(Vault_Scan_ID %in% vault_id_focus)
+```
+
+Check columns that contain "ID" in the column name.  
+
+```{r, check_scan_ids_f}
+df %>% 
+  select(Vault_Scan_ID, Vault_UID, contains("ID", ignore.case = FALSE)) %>% 
+  filter(Vault_Scan_ID %in% vault_id_focus)
+```
+
+**What other identifiers should be considered here??** 
+Identifiers to include : age, sex, race, education , APOE_allele, PiB Regional values Left , PiB regional Right, PiB Global Values , GMD regional Left, GMD right, GMD global, FDG Regional left, FDG regional Right, FDG global  
+
+How many unique people are there? And how many rows are associated with each unique person?  n = 93 ; max number of rows associated with a unique person is 4 
+
+```{r, check_people_ids_a}
+df %>% 
+  count(Vault_UID) %>% 
+  arrange(desc(n))
+```
+
+Count for the number of times each unique number of rows appears. So there are 6 `Vault_UID` values with 4 rows in the data set. There are 28 `Vault_ID` values with 3 rows in the data set. There are more unique `Vault_UID` values that appear more than once in the data set than the `Vault_UID` values that appear once.  
+
+```{r, check_people_ids_b}
+df %>% 
+  count(Vault_UID) %>% 
+  count(n, name='times_occurs')
+```
+
+## FDG Exploration
+
+Extract the FDG related variables along with the unique identifiers.  
+
+**Will need to do this again based on the unique identifiers that should be included.**  
+
+```{r, get_FDG_data}
+fdg_df <- df %>% select(Vault_Scan_ID, Vault_UID, starts_with("FDG_"))
+fdg_df %>% glimpse()
+```
+
+
+
+Focusing on the variables with `FDG_regional_` naming patterns.  
+
+```{r, make_FDG_regional_df}
+fdg_regional_wf <- fdg_df %>% 
+  select(starts_with("Vault"), FDG_Scan_Date, starts_with("FDG_regional"))
+fdg_regional_wf %>% glimpse()
+```
+
+Check number of missings per column.  
+
+```{r, count_missings_per_column}
+fdg_regional_wf %>% purrr::map_dbl(~sum(is.na(.)))
+```
+
+Distribution of the FDG regional variables across all rows. This ignores any grouping by people.  
+
+```{r, viz_fdg_hists}
+fdg_regional_wf %>% 
+  tibble::rowid_to_column() %>% 
+  pivot_longer(cols = starts_with("FDG_regional")) %>% 
+  ggplot(mapping = aes(x = value)) +
+  geom_histogram(bins = 10) +
+  facet_wrap(~name) +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(size = 4.5))
+```
+
+Use boxplots instead.  
+
+```{r, viz_FDG_boxplots}
+fdg_regional_wf %>% 
+  tibble::rowid_to_column() %>% 
+  pivot_longer(cols = starts_with("FDG_regional")) %>% 
+  ggplot(mapping = aes(y = name, x = value)) +
+  geom_boxplot(fill = 'grey') +
+  theme_bw() +
+  theme(axis.text.y = element_text(size = 5.5))
+```
+
+Start to parse the regional variable names.  
+
+Create a helper function to separate the variable names based on the `'_'` pattern. The helper function is required because the number of underscores is not consistent across the regional names.  
+
+```{r, make_helper_parser}
+my_separate <- function(the_data, num_us)
+{
+  names_keep <- the_data %>% select(-name) %>% names()
+  
+  the_data %>% 
+    tidyr::separate(name,
+                    c("result_type", "regional_word",
+                      sprintf("name_%02d", 1:(num_us-1))),
+                    sep = "_") %>% 
+    rename(!!!c("side_name" = sprintf("name_%02d", num_us-1))) %>% 
+    tidyr::unite("region_name",
+                 sprintf("name_%02d", 1:(num_us-2)),
+                 sep = "_") %>% 
+    select(all_of(c(names_keep,
+                    "result_type", "region_name", "side_name")))
+}
+```
+
+Apply the helper function based on the number of underscores to create the long-format data.  
+
+```{r, check_parse_regional_names_a}
+fdg_regional_lf <- fdg_regional_wf %>% 
+  tibble::rowid_to_column() %>% 
+  pivot_longer(cols = starts_with("FDG_regional")) %>% 
+  mutate(num_underscores = stringr::str_count(name, pattern = "_")) %>% 
+  group_by(num_underscores) %>% 
+  tidyr::nest() %>% 
+  mutate(ready_data = purrr::map2(data, num_underscores, my_separate)) %>% 
+  select(num_underscores, ready_data) %>% 
+  tidyr::unnest(ready_data) %>% 
+  ungroup()
+```
+
+
+Check the unique region names and the number of rows associated with each region name.  
+
+```{r, check_parse_regioinal_names_b}
+fdg_regional_lf %>% 
+  ggplot(mapping = aes(y = region_name)) +
+  geom_bar() +
+  theme_bw()
+```
+
+Include the side.  
+
+```{r, check_parse_regional_names_c}
+fdg_regional_lf %>% 
+  ggplot(mapping = aes(y = region_name)) +
+  geom_bar(mapping = aes(fill = side_name)) +
+  scale_fill_brewer(palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top')
+```
+
+Distributions of FDG values per region and side. Note the x-axis scales are the same in each facet.  
+
+Frontal_Sup_2 regions shows significant asymmetry out of all the regions 
+
+```{r, viz_FDG_results_hist}
+fdg_regional_lf %>% 
+  ggplot(mapping = aes(x = value)) +
+  geom_freqpoly(mapping = aes(color = side_name,
+                              group = interaction(region_name, 
+                                                  side_name),
+                              y = stat(density)),
+                size = 1.2,
+                bins = 15) +
+  facet_wrap(~region_name, scales = "free_y") +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top',
+        axis.text.y = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6.5))
+```
+
+Allow the x-axis scales to vary across facets.
+kept the bin number constant
+zoom in to see the plot 
+
+```{r, viz_FDG_results_hist_b}
+fdg_regional_lf %>% 
+  ggplot(mapping = aes(x = value)) +
+  geom_freqpoly(mapping = aes(color = side_name,
+                              group = interaction(region_name, 
+                                                  side_name),
+                              y = stat(density)),
+                size = 1.2,
+                bins = 15) +
+  facet_wrap(~region_name, scales = "free") +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top',
+        axis.text.y = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 3.5))
+```
+
+Check the behavior of the repeated observations per person. The x-axis corresponds to a unique `Vault_UID` but the axis text has been turned off to make the plots easier to read.  
+
+```{r}
+fdg_regional_lf %>% 
+  group_by(Vault_UID, region_name, side_name) %>% 
+  summarise(num_rows = n(),
+            avg_value = mean(value, na.rm=TRUE),
+            min_value = min(value, na.rm = TRUE),
+            max_value = max(value, na.rm = TRUE),
+            .groups = 'drop') %>% 
+  mutate(range_value = max_value - min_value) %>% 
+  ggplot(mapping = aes(y = region_name, x = range_value)) +
+  geom_boxplot(mapping=aes(group = interaction(region_name, side_name),
+                           fill = side_name,
+                           color = side_name),
+               alpha = 0.3) +
+  scale_color_brewer("", palette = "Set1") +
+  scale_fill_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top')
+```
+
+
+
+```{r, viz_result_per_person_a}
+fdg_regional_lf %>% 
+  ggplot(mapping = aes(x = as.factor(Vault_UID), y = value)) +
+  stat_summary(geom = 'linerange',
+               fun.min = 'min', fun.max = 'max',
+               mapping = aes(group = interaction(Vault_UID, 
+                                                 region_name,
+                                                 side_name),
+                             color = side_name),
+               position = position_dodge(0.1),
+               size = 1.2, alpha = 0.5) +
+  geom_point(mapping = aes(group = interaction(Vault_UID,
+                                               region_name,
+                                               side_name),
+                           color = side_name),
+             position = position_dodge(0.1)) +
+  facet_wrap(~region_name, scales = 'free_y') +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top',
+        axis.text.x = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 6.5))
+```
+
+Focused on a single region.  
+
+Region: Frontal_Sup_2 since it shows significant asymmetry 
+
+```{r, viz_result_per_person_a_1}
+fdg_regional_lf %>% 
+  filter(region_name %in% 'Frontal_Sup_2') %>% 
+  ggplot(mapping = aes(x = as.factor(Vault_UID), y = value)) +
+  stat_summary(geom = 'linerange',
+               fun.min = 'min', fun.max = 'max',
+               mapping = aes(group = interaction(Vault_UID, 
+                                                 region_name,
+                                                 side_name),
+                             color = side_name),
+               position = position_dodge(0.2),
+               size = 1.2, alpha = 0.5) +
+  geom_point(mapping = aes(group = interaction(Vault_UID,
+                                               region_name,
+                                               side_name),
+                           color = side_name),
+             position = position_dodge(0.2)) +
+  facet_wrap(~region_name, scales = 'free_y') +
+  scale_color_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(legend.position = 'top',
+        axis.text.x = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(size = 13.5))
+```
+
+
+```{r}
+fdg_regional_lf %>% 
+  mutate(scan_date_year = lubridate::year(FDG_Scan_Date),
+         scan_date_month = lubridate::month(FDG_Scan_Date),
+         scan_date_day = lubridate::day(FDG_Scan_Date),
+         scan_date_hour = lubridate::hour(FDG_Scan_Date)) %>% 
+  group_by(scan_date_year, scan_date_month) %>% 
+  summarise(num_rows = n(),
+            num_people = n_distinct(Vault_UID),
+            .groups = 'drop') %>% 
+  ggplot(mapping = aes(x = scan_date_month, y = num_people)) +
+  geom_line(mapping = aes(color = as.factor(scan_date_year),
+                          group = scan_date_year),
+            size = 1.2) +
+  geom_point(mapping = aes(color = as.factor(scan_date_year)),
+             size = 4) +
+  coord_cartesian(ylim = c(0, 15)) +
+  scale_color_viridis_d("Year") +
+  scale_x_continuous(breaks = 1:12) +
+  theme_bw()
+```
+
+
+Are PIB values increasing over time. Summarize across all people in a given region.  
+
+```{r}
+fdg_regional_lf %>% 
+  mutate(scan_date_year = lubridate::year(FDG_Scan_Date),
+         scan_date_month = lubridate::month(FDG_Scan_Date),
+         scan_date_day = lubridate::day(FDG_Scan_Date),
+         scan_date_hour = lubridate::hour(FDG_Scan_Date)) %>% 
+  mutate(scan_year_month = sprintf("%4d-%02d", scan_date_year, scan_date_month)) %>% 
+  filter(region_name %in% "Frontal_Sup_2") %>% 
+  ggplot(mapping = aes(x = scan_year_month, y = value)) +
+  geom_boxplot(mapping = aes(group = interaction(region_name,
+                                                 side_name,
+                                                 scan_year_month),
+                             fill = side_name,
+                             color = side_name)) +
+  facet_wrap(~region_name) +
+  scale_color_brewer("", palette = "Set1") +
+  scale_fill_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(size = 5.5))
+```
+
+Focus on a single region, use facets to show different years.  
+
+```{r}
+fdg_regional_lf %>% 
+  mutate(scan_date_year = lubridate::year(FDG_Scan_Date),
+         scan_date_month = lubridate::month(FDG_Scan_Date),
+         scan_date_day = lubridate::day(FDG_Scan_Date),
+         scan_date_hour = lubridate::hour(FDG_Scan_Date)) %>% 
+  mutate(scan_year_month = sprintf("%4d-%02d", scan_date_year, scan_date_month)) %>% 
+  filter(region_name %in% "Frontal_Sup_2") %>% 
+  ggplot(mapping = aes(x = scan_date_month, y = value)) +
+  geom_boxplot(mapping = aes(group = interaction(region_name,
+                                                 side_name,
+                                                 scan_date_month,
+                                                 scan_date_year),
+                             fill = side_name,
+                             color = side_name)) +
+  facet_wrap(~region_name+scan_date_year) +
+  scale_color_brewer("", palette = "Set1") +
+  scale_fill_brewer("", palette = "Set1") +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(size = 5.5))
+```
+
+
+Individual person.  
+
+```{r}
+unique_people_bb <- fdg_regional_lf %>% 
+  group_by(Vault_UID) %>% 
+  summarize(num_scans = n_distinct(Vault_Scan_ID),
+            .groups = 'drop') %>% 
+  arrange(desc(num_scans)) %>% 
+  pull(Vault_UID)
+```
+
+Few people, 1 region.  
+
+```{r}
+fdg_regional_lf %>% 
+  mutate(scan_date_year = lubridate::year(FDG_Scan_Date),
+         scan_date_month = lubridate::month(FDG_Scan_Date),
+         scan_date_day = lubridate::day(FDG_Scan_Date),
+         scan_date_hour = lubridate::hour(FDG_Scan_Date)) %>% 
+  mutate(scan_year_month = sprintf("%4d-%02d", scan_date_year, scan_date_month)) %>% 
+  filter(region_name %in% "Frontal_Sup_2") %>% 
+  filter(Vault_UID %in% unique_people_bb[1:6]) %>% 
+  ggplot(mapping = aes(x = FDG_Scan_Date, y = value)) +
+  geom_line(mapping = aes(color = side_name),
+            size = 1.2) +
+  geom_count(mapping = aes(color = side_name)) +
+  facet_grid(side_name~region_name + Vault_UID, scales = "free") +
+  scale_color_brewer(guide='none', palette = "Set1") +
+  theme_bw()
+```
+
+
+
+# 900719 plot looks weird 
+
+
+```{r}
+fdg_regional_lf %>% 
+  mutate(scan_date_year = lubridate::year(FDG_Scan_Date),
+         scan_date_month = lubridate::month(FDG_Scan_Date),
+         scan_date_day = lubridate::day(FDG_Scan_Date),
+         scan_date_hour = lubridate::hour(FDG_Scan_Date)) %>% 
+  mutate(scan_year_month = sprintf("%4d-%02d", scan_date_year, scan_date_month)) %>% 
+  filter(region_name %in% "Frontal_Sup_2") %>% 
+  filter(Vault_UID %in% unique_people_bb[3]) %>% 
+  ggplot(mapping = aes(x = FDG_Scan_Date, y = value)) +
+  geom_line(mapping = aes(color = side_name),
+            size = 1.2) +
+  geom_count(mapping = aes(color = side_name)) +
+  facet_grid(side_name~region_name + Vault_UID, scales = "free") +
+  scale_color_brewer(guide='none', palette = "Set1") +
+  theme_bw()
+```
+
+# '900719' Vault_UID 
+
+```{r}
+people_900719_occur <- df %>% 
+  count(Vault_UID == 900719)
+people_900719_occur
+```
+
+Find all FDG values corresponding with Vault_UID == 900719 in specific region
+Plot looks weird because three of the scans are missing FDG_Scan_dates 
+```{r}
+fdg_regional_lf %>% mutate()
+fdg_900719 <- fdg_df %>% filter(Vault_UID == 900719) %>%
+  select(starts_with("Vault"), FDG_Scan_Date, starts_with("FDG_regional_Frontal_Sup_2"))
+fdg_900719 %>% glimpse()
+```
+
+
+Find FDG regional value ranges in a specific region for a few participants 
+```{r}
+fdg_regional_lf %>% 
+  mutate(scan_date_year = lubridate::year(FDG_Scan_Date),
+         scan_date_month = lubridate::month(FDG_Scan_Date),
+         scan_date_day = lubridate::day(FDG_Scan_Date),
+         scan_date_hour = lubridate::hour(FDG_Scan_Date)) %>% 
+  mutate(scan_year_month = sprintf("%4d-%02d", scan_date_year, scan_date_month)) %>% 
+  filter(region_name %in% "Frontal_Sup_2") %>% 
+  filter(Vault_UID %in% unique_people_bb[1:10]) %>% 
+  ggplot(mapping = aes(x = FDG_Scan_Date, y = value)) +
+  geom_line(mapping = aes(color = side_name),
+            size = 1.2) +
+  geom_count(mapping = aes(color = side_name)) +
+  facet_grid(side_name~region_name + Vault_UID, scales = "free") +
+  scale_color_brewer(guide='none', palette = "Set1") +
+  theme_bw()
+```
+
+

@@ -1,0 +1,131 @@
+### CS 1950 : Research Project ###
+### Hunsi Jayaprakash 
+### Week02 
+
+
+
+### Description ######
+
+
+### Counts and frequencies of categorical and continuous variables. Counted the number of total unique scan observations (Valt_Scan_ID) and the frequency of participants (Valt_UID). Frequency and Mean of Age_CurrentVisit and Calculated the Probability distribution per PiB column header (total of 10). The unique ID for each individuals was not incorporated in the probability distributions ###
+
+
+### Install Libraries ###
+library(tidyverse)
+
+
+### Load Data ###
+
+```{r, read_in_data, eval= TRUE}
+my_rawdata <- ("https://raw.githubusercontent.com/jyurko/cs_1950_brain_proj/main/KLU_APC2_Master_2021_07_07.csv?token=GHSAT0AAAAAABQQ7BMD52NQ6GTAVWBJGAKMYP5FZFA")
+data <- readr::read_csv(my_rawdata,col_names = TRUE)
+```
+### Count the individual Scan observations ###
+```{r, data_scan_obs, eval=TRUE}
+data %>% count(Vault_Scan_ID)
+```
+### Frequency of Participants ###
+```{r, data_count_participants, eval= TRUE}
+data %>% count(Vault_UID)
+```
+
+### Frequency of Age ###
+```{r, data_count_age, eval= TRUE}
+ data %>% count(Age_CurrentVisit)
+```
+### Mean Age over all observations ###
+# How to encode NA observations? #
+```{r, data_mean_age, eval= TRUE}
+current_age <- data$Age_CurrentVisit
+mean(current_age, na.rm =TRUE)
+```
+### Frequency of Variable:Sex ###
+# NA variable? # 
+```{r, data_count_var, eval= TRUE}
+data %>% count(Sex != "NA")
+data %>% count(Sex == "Male")
+```
+
+### Frequency of Variable: Race ###
+```{r, data_freq_race, eval= TRUE}
+data %>% count(Race)
+```
+
+### Frequency of Variable: Education (years)###
+```{r, data_count_Education, eval= TRUE}
+data %>% count(Education)
+```
+### Frequency of Variable: APOE_Allele ###
+```{r, data_count_genetic, eval= TRUE}
+data %>% count(APOE_CODE)
+```
+
+
+### Distribution of PiB in AnteriorCingulate: global region 1 ###
+```{r,prob_dist_PiB_region1,eval=TRUE}
+PiB_AnteriorCingulateGyrus <-data$PiB_SUVR_GTM_FS_AnteriorCingulate
+hist(PiB_AnteriorCingulateGyrus, probability = TRUE)
+
+```
+
+### Distribution of PiB in AnteriorVentralStriatum: global region 2 ###
+```{r,prob_dist_PiB_region2,eval=TRUE}
+
+PiB_AnteriorVentralStriatum<-data$PiB_SUVR_GTM_FS_AnteriorVentralStriatum
+hist(PiB_AnteriorVentralStriatum, probability = TRUE)
+```
+### Distribution of PiB in Superior Frontal: global region 3 ###
+```{r,prob_dist_PiB_region3,eval=TRUE}
+
+PiB_SuperiorFrontal<-data$PiB_SUVR_GTM_FS_SuperiorFrontal
+hist(PiB_SuperiorFrontal, probability = TRUE)
+```
+### Distribution of PiB in OrbitoFrontal: global region 4 ###
+```{r,prob_dist_PiB_region4,eval=TRUE}
+
+PiB_OrbitoFrontal<-data$PiB_SUVR_GTM_FS_OrbitoFrontal
+hist(PiB_OrbitoFrontal, probability = TRUE)
+```
+### Distribution of PiB in Insula: global region 5 ###
+```{r,prob_dist_PiB_region5,eval=TRUE}
+
+PiB_Insula<-data$PiB_SUVR_GTM_FS_Insula
+hist(PiB_Insula,probability = TRUE)
+
+```
+### Distribution of PiB in LateralTemporal : global region 6 ###
+```{r,prob_dist_PiB_region6,eval=TRUE}
+
+PiB_LateralTemporal<-data$PiB_SUVR_GTM_FS_LateralTemporal
+hist(PiB_LateralTemporal, probability = TRUE)
+```
+### Distribution of PiB in Parietal: global region 7 ###
+```{r,prob_dist_PiB_region7,eval=TRUE}
+
+PiB_Parietal<-data$PiB_SUVR_GTM_FS_Parietal
+hist(PiB_Parietal, probability = TRUE)
+```
+### Distribution of PiB in PosteriorCingulate: global region 8 ###
+```{r,prob_dist_PiB_region8,eval=TRUE}
+
+PiB_PosteriorCingulate<-data$PiB_SUVR_GTM_FS_PosteriorCingulate
+hist(PiB_PosteriorCingulate, probability = TRUE)
+```
+
+### Distribution of PiB in Precuneus: global region 9 ###
+```{r,prob_dist_PiB_region9,eval=TRUE}
+
+PiB_Precuneus<-data$PiB_SUVR_GTM_FS_Precuneus
+hist(PiB_Precuneus, probability = TRUE)
+```
+### Distribution of PiB Global value ###
+```{r,prob_dist_PiB_global,eval=TRUE}
+PiB_Global<-data$PiB_SUVR_GTM_FS_Global
+hist(PiB_Global, probability = TRUE)
+```
+
+### Summary of PiB global regions: all regions exhibits right skeweness. x values lie on the interval (0, 6.00). PiB_positive individuals are those who have values > 1.57. PiB_negative individals are those who have values < 1.57.
+
+
+
+
